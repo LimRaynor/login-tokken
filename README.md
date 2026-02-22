@@ -193,7 +193,199 @@ Refresh Token = { subject: email, role: "USER", iat: 발급시각, exp: 발급+7
 │  DB RefreshToken 삭제 + 쿠키 maxAge=0 + localStorage 삭제       │
 └─────────────────────────────────────────────────────────────────┘
 ```
+🔐 JWT 기반 인증 아키텍처 정리
+1. Security 레이어 구성 (수업자료 ↔ 프로젝트 매핑)
+역할	수업자료	프로젝트	비고
+토큰 생성/검증	JwtTokenProvider	JwtTokenProvider	동일
+사용자 조회	CustomUserDetailsService	CustomUserDetailsService	동일
+요청 필터	JwtAuthenticationFilter	JwtAuthenticationFilter (@Component)	등록 방식만 다름
+401 처리	RestAuthenticationEntryPoint	RestAuthenticationEntryPoint	동일
+403 처리	RestAccessDeniedHandler	RestAccessDeniedHandler	동일
+보안 설정	SecurityConfig	SecurityConfig	permitAll 범위 차이 있음
+Refresh 저장소	AuthRepository	RefreshTokenRepository	이름만 변경
+인증 서비스	AuthService	AuthCommandService	signup 추가
+인증 컨트롤러	AuthController	AuthCommandController	signup 추가
+permitAll 차이
 
+수업자료:
+/api/v1/auth/login, /api/v1/auth/refresh 개별 허용
+
+프로젝트:
+POST /api/auth/** 전체 허용 (범위가 더 넓음)
+
+2. 전체 아키텍처 흐름
+
+인증 흐름은 크게 3가지로 나뉜다.
+
+로그인 (토큰 발급)
+
+인증 요청 (보호된 API 접근)
+
+토큰 재발급 (Refresh)
+
+3. 로그인 흐름 (Token 발급)
+Client
+  ↓
+POST /api/auth/login
+  ↓
+AuthCommandController.login()
+  ↓
+AuthCommandService.login()
+  ↓
+UserRepository.findByEmail()
+  ↓
+PasswordEncoder.matches()
+  ↓
+JwtTokenProvider.createToken()
+JwtTokenProvider.createRefreshToken()
+  ↓
+RefreshTokenRepository.save()
+  ↓
+Response
+  - accessToken (Body)
+  - refreshToken (HttpOnly Cookie + Body)
+핵심 포인트
+
+Access Token → 짧은 수명
+
+Refresh Token → 긴 수명 (DB 저장)
+
+서버는 세션을 사용하지 않음 (Stateless)
+
+4. 보호된 API 요청 흐름
+Client
+  ↓
+GET /api/accounts
+Header: Authorization: Bearer accessToken
+  ↓
+[Security Filter Chain]
+  ↓
+JwtAuthenticationFilter
+  - 토큰 추출
+  - 토큰 검증
+  - 이메일 추출
+  - DB 사용자 조회
+  - SecurityContextHolder 인증 세팅
+  ↓
+Security 인가 판단
+  - 인증 필요한 API인가?
+      YES → 인증 정보 존재?
+          NO  → 401 (AuthenticationEntryPoint)
+          YES → Controller 진입
+중요 개념
+
+필터는 Controller보다 먼저 실행됨
+
+Controller는 토큰을 직접 검증하지 않음
+
+인증 여부는 SecurityContextHolder를 통해 판단됨
+
+5. Access 만료 → Refresh 흐름
+Client
+  ↓
+POST /api/auth/refresh
+Cookie: refreshToken
+  ↓
+AuthCommandController.refresh()
+  ↓
+AuthCommandService.refreshToken()
+  ↓
+JwtTokenProvider.validateToken()
+  ↓
+RefreshTokenRepository.findByUserEmail()
+  ↓
+DB 토큰 비교
+  ↓
+만료일 검사
+  ↓
+새 access / refresh 발급
+  ↓
+RefreshTokenRepository.save() (갱신)
+  ↓
+Response
+  - 새 accessToken
+  - 새 refreshToken (쿠키 재설정)
+왜 Refresh를 DB에 저장하는가?
+
+서버가 발급한 토큰인지 검증하기 위함
+
+로그아웃 시 강제 만료 가능
+
+탈취 대응 가능
+
+한 사용자당 하나의 refresh 유지 가능
+
+6. 예외 처리 흐름
+인증 실패 (401)
+
+발생 조건:
+
+토큰 없음
+
+토큰 위조
+
+토큰 만료
+
+인증 정보 없음
+
+처리:
+
+RestAuthenticationEntryPoint → 401 반환
+권한 부족 (403)
+
+발생 조건:
+
+인증은 되었으나 ROLE 불일치
+
+처리:
+
+RestAccessDeniedHandler → 403 반환
+7. 레이어 구조 정리
+Security Layer
+
+SecurityConfig
+
+JwtAuthenticationFilter
+
+JwtTokenProvider
+
+CustomUserDetailsService
+
+RestAuthenticationEntryPoint
+
+RestAccessDeniedHandler
+
+Auth Layer
+
+AuthCommandController
+
+AuthCommandService
+
+RefreshTokenRepository
+
+UserRepository
+
+Persistence Layer
+
+MariaDB
+
+User
+
+RefreshToken
+
+8. 핵심 개념 요약
+
+서버는 세션을 저장하지 않는다.
+
+Access Token이 곧 인증 정보다.
+
+Refresh Token은 재발급 티켓이다.
+
+인증은 필터에서 처리된다.
+
+Controller는 인증이 완료된 요청만 받는다.
+
+SecurityContextHolder는 현재 요청의 인증 정보를 저장한다.
 ---
 
 ## 핵심 설계 포인트
