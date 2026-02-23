@@ -108,7 +108,7 @@ Spring Security 동작 원리
 → Controller
 
 JwtAuthenticationFilter extends OncePerRequestFilter
-→ 요청 한 번당 한 번만 실행 (중복 방지)
+→ 요청 한 번당 한 번만 실행 (중복방지)
 
 모든 요청이 이 필터를 거치지만,
 토큰이 없으면 인증 없이 통과 (chain.doFilter)
